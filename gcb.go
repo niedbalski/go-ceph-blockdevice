@@ -129,6 +129,8 @@ func NewDevice(image *Image, fsType string, mountPoint string) (*Device, error) 
 		if _, err = new_device.Mount(mountPoint); err != nil {
 			return nil, err
 		}
+
+		new_device.isMounted = true
 	}
 
 	return new_device, nil
