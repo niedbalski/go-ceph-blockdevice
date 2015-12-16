@@ -1,4 +1,4 @@
-package main
+package blockdevice
 
 import (
 	"fmt"
@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	DefaultPoolName       = ""
+	DefaultPoolName       = "rbd"
 	DefaultFileSystemType = "xfs"
 )
 
@@ -33,6 +33,14 @@ type Device struct {
 	isMounted      bool
 	fileSystemType string
 	mountPoint     string
+}
+
+func (d *Device) GetPath() string {
+	return d.path
+}
+
+func (d *Device) GetMountPoint() string {
+	return d.mountPoint
 }
 
 func (d *Device) Mount(mountPoint string) (string, error) {
@@ -101,13 +109,29 @@ func (d *Device) UnMount() error {
 	return nil
 }
 
-func NewDevice(image *Image, fsType string) (*Device, error) {
+func NewDevice(image *Image, fsType string, mountPoint string) (*Device, error) {
 	device, err := RunCommand("rbd", "map", "--id", image.username, "--pool", image.pool, image.name)
 	if err != nil {
 		return nil, err
 	}
 
-	return &Device{device, false, DefaultFileSystemType, ""}, nil
+	if fsType == "" {
+		fsType = DefaultFileSystemType
+	}
+
+	new_device := &Device{device, false, fsType, mountPoint}
+
+	if err = new_device.Format(); err != nil {
+		return nil, err
+	}
+
+	if mountPoint != "" {
+		if _, err = new_device.Mount(mountPoint); err != nil {
+			return nil, err
+		}
+	}
+
+	return new_device, nil
 }
 
 func toMegs(size uint64) uint64 {
@@ -120,8 +144,8 @@ func RunCommand(name string, args ...string) (string, error) {
 	return strings.Trim(string(out), " \n"), err
 }
 
-func (i *Image) MapToDevice(fsType string) (*Device, error) {
-	device, err := NewDevice(i, fsType)
+func (i *Image) MapToDevice(fsType string, mountPoint string) (*Device, error) {
+	device, err := NewDevice(i, fsType, mountPoint)
 	if err != nil {
 		return nil, err
 	}
