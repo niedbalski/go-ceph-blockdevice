@@ -5,6 +5,7 @@ import (
 	"github.com/ceph/go-ceph/rados"
 	"github.com/ceph/go-ceph/rbd"
 	"os/exec"
+	"regexp"
 	"strings"
 )
 
@@ -149,20 +150,32 @@ func RunCommand(name string, args ...string) (string, error) {
 func (i *Image) MapToDevice(fsType string, mountPoint string) (*Device, error) {
 	device, err := NewDevice(i, fsType, mountPoint)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("Cannot create new device for image: %s, Error: %s", i.name, err)
 	}
 	return device, err
 }
 
-func NewImage(image *rbd.Image, connection *Connection, name string) (*Image, error) {
-	stat, err := image.Stat()
+func (i *Image) IsAlreadyMapped() string {
+	devices, err := i.GetMappedDevices()
 	if err != nil {
+		return ""
+	}
+
+	if path, ok := devices[i.name]; ok {
+		return path
+	}
+
+	return ""
+}
+
+func NewImage(image *rbd.Image, connection *Connection, name string) (*Image, error) {
+	if err := image.Open(true); err != nil {
 		return nil, err
 	}
 
-	err = image.Open(true)
+	stat, err := image.Stat()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("Cannot state image: %s, Error: %s", name, err)
 	}
 
 	return &Image{
@@ -183,14 +196,13 @@ func (c *Connection) GetImageByName(name string) (*Image, error) {
 }
 
 func (c *Connection) GetOrCreateImage(name string, size uint64) (*Image, error) {
-	image, err := c.GetImageByName(name)
-	if image != nil {
+	if image, _ := c.GetImageByName(name); image != nil {
 		return image, nil
 	}
 
 	new_image, err := rbd.Create(c.context, name, toMegs(size))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("Cannot create image:%s of size:%d on pool: %s, Error: %s", name, toMegs(size), c.pool, err)
 	}
 
 	return NewImage(new_image, c, name)
@@ -209,7 +221,7 @@ func NewConnection(username string, pool string, cluster string, configFile stri
 	}
 
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("Error creating a connection with ceph, Error: %s", err)
 	}
 
 	if configFile != "" {
@@ -219,12 +231,21 @@ func NewConnection(username string, pool string, cluster string, configFile stri
 	}
 
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("Error reading ceph configuration, Error: %s", err)
+	}
+
+	err = conn.Connect()
+	if err != nil {
+		return nil, fmt.Errorf("Error connecting to ceph, Error: %s", err)
+	}
+
+	if pool == "" {
+		pool = DefaultPoolName
 	}
 
 	context, err := conn.OpenIOContext(pool)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("Error opening a IO Context with ceph, Error; %s", err)
 	}
 
 	return &Connection{
@@ -234,6 +255,23 @@ func NewConnection(username string, pool string, cluster string, configFile stri
 		username,
 		cluster,
 	}, nil
+}
+
+func (c *Connection) GetMappedDevices() (map[string]string, error) {
+	output, err := RunCommand("rbd", "showmapped")
+	if err != nil {
+		return nil, err
+	}
+
+	devices := make(map[string]string)
+	for _, line := range strings.Split(output, "\n") {
+		if matches, _ := regexp.MatchString("[0-9]+.*['\\/dev\\/rbd']+", line); matches == true {
+			line := strings.Split(line, " ")
+			devices[line[4]] = line[9]
+		}
+	}
+
+	return devices, nil
 }
 
 func (c *Connection) Shutdown() {
